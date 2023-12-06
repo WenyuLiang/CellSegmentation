@@ -1,3 +1,28 @@
+# MIT License
+
+# Copyright (c) 2023 wliang
+
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+
+# The above copyright notice and this permission notice shall be included in all
+# copies or substantial portions of the Software.
+
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+# SOFTWARE.
+
+# Author: Wenyu Liang
+# Date: 2023-12-05
+# Contact: liangwy@salus-bio.com
 import os
 import scanpy as sc
 import scselpy as scS 
@@ -17,9 +42,10 @@ description="Example: python seg.py -p simple_grids/YL1025E1new_E1_b400 -o resul
 parser = argparse.ArgumentParser(description=description)
 parser.add_argument('-p', '--path', type=str,help='path to the matrix')
 parser.add_argument('-o', '--outpath', type=str,help='output path', default='./')
-parser.add_argument('-t', '--threshold', type=int, default=90, help='threshold for binarization')
-parser.add_argument('-b', '--bin', type=str, default='100', help='bin size (100 or 400)')
-parser.add_argument('-s', '--size', type=int, default=15, help='marker size of the plot: don\'t change it unless you are not satisfied with the default size')
+parser.add_argument('-t', '--threshold', type=int, default=-1, help='threshold for binarization(default 90)')
+parser.add_argument('-b', '--bin', type=str, help='bin size (40|100|400)', required=True)
+parser.add_argument('-s', '--size', type=int, default=-1, help='marker size of the plot: don\'t change it unless you are not satisfied with the default size')
+parser.add_argument('-m', '--smooth', type=bool, default=False, help='whether to smooth the image(default False)')
 args = parser.parse_args()
 
 adata = sc.read_10x_mtx(args.path, var_names='gene_symbols', cache=True)
@@ -41,12 +67,28 @@ if not os.path.exists(outpath):
     os.makedirs(outpath)
 
 if args.bin == '100':
-    marker_size = args.size
+    marker_size = 15
+    threshold = 90
+    factor = 0.0005
 elif args.bin == '400':
     marker_size = 100
+    threshold = 90
+    factor = 0.000001
+elif args.bin == '40':
+    factor = 0.0003
+    marker_size = 15
+    threshold = 100
 else:
-    raise ValueError("Invalid bin size: Only 100 or 400 are supported.")
+    raise ValueError("Invalid bin size: Only 40 or 100 or 400 are supported.")
 
+if args.size not in [-1, 15, 100]:
+    marker_size = args.size
+if threshold not in [-1, 90, 100]:
+    threshold = args.threshold
+
+# print("Threshold: ", threshold)
+# print("Marker size: ", marker_size)
+# print("Factor: ", factor)
 sc.pp.calculate_qc_metrics(adata, percent_top=None, log1p=False, inplace=True)
 total_counts = adata.var['total_counts'].sum()
  
@@ -70,16 +112,31 @@ img = cv2.imread(outpath + "temp.png")
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
 # Threshold the image
-ret, binary = cv2.threshold(gray, args.threshold, 255, cv2.THRESH_BINARY)
+ret, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
 
 # Find contours
 contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
+if args.smooth:
+    #-------------------------------------smooth-------------------------------------#
+    binary = cv2.GaussianBlur(binary, (7, 7), 5)
+    #binary = cv2.bilateralFilter(binary, 9, 100, 100) 
+
+    # 2. Find contours
+    contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+# 3. Find the third largest contour
 if len(contours) >= 3:
     three_largest_contours = heapq.nlargest(3, contours, key=cv2.contourArea)
     largest_contour = three_largest_contours[2]
 else:
     raise ValueError("Not enough contours found to extract the third largest one.")
+
+# 4. Approximate contours
+if args.smooth:
+    epsilon = factor * cv2.arcLength(largest_contour, True)   
+    largest_contour = cv2.approxPolyDP(largest_contour, epsilon, True)  
+#-------------------------------------smooth-------------------------------------#
 
 def preprocess(adata):
     adata_fake = adata.copy()
@@ -95,7 +152,7 @@ def preprocess(adata):
     barcode_coords = barcode_coords[sorted_indices]
     custom_cmap = matplotlib.colors.ListedColormap([(0,0,0),(1,1,1)], name='custom')
     # Plot the embedding with the barcode coordinates marked
-    ax = sc.pl.embedding(adata_fake, basis='spatial', color='total_counts',
+    ax = sc.pl.embedding(adata_fake, basis='spatial', color='n_genes_by_counts', #total_counts
                     color_map=custom_cmap, s=marker_size, show=False)
 
     # Highlight the four known barcode positions
@@ -104,7 +161,7 @@ def preprocess(adata):
                  marker='*')
 
     # Add a legend to help identify the barcodes
-    plt.legend()
+    #plt.legend()
     plt.axis('off')
     ax.set_title('')
     # Save the figure
@@ -130,8 +187,8 @@ def process_image(binary):
     imContours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
     # Define size constraints
-    divMaxSize = 0.180
-    divMinSize = 0.120
+    # divMaxSize = 0.180
+    # divMinSize = 0.120
     # Create a window for display
     # cv2.namedWindow("Image", cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_EXPANDED)
     # Loop through the contours
@@ -152,11 +209,21 @@ def process_image(binary):
             barcode_pixel_coords.append((cx, cy))
     return np.array(barcode_pixel_coords)
 
+def CheckCollinear(p1, p2, p3):
+    if p1[0] == p2[0] == p3[0]:
+        return True
+    elif p1[1] == p2[1] == p3[1]:
+        return True
+    elif (p1[0] - p2[0]) * (p1[1] - p3[1]) == (p1[0] - p3[0]) * (p1[1] - p2[1]):
+        return True
+    else:
+        return False
+
 count = 0
 while count < 10:
     barcode_coords, _binary = preprocess(adata)
     barcode_pixel_coords = process_image(_binary)
-    if barcode_pixel_coords.shape == (3,2):
+    if barcode_pixel_coords.shape == (3,2) and not CheckCollinear(barcode_pixel_coords[0], barcode_pixel_coords[1], barcode_pixel_coords[2]):
         break   
     count += 1
     if count == 10:
@@ -183,3 +250,36 @@ adata.obs['in_tissue'] = adata.obs['REMAP_1'].apply(lambda x: 1 if x == '1' else
 adata_in_tissue = adata[adata.obs['in_tissue'] == 1]
 adata.write(outpath + "adata_original.h5ad")
 adata_in_tissue.write(outpath + "adata_in_tissue.h5ad")
+
+
+ax = sc.pl.embedding(adata_in_tissue, basis="spatial", color="total_counts", s=marker_size,
+                     color_map="RdYlBu_r", title="total_counts", show=False)
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.tick_params(axis='x')
+ax.tick_params(axis='y')
+
+ax.set_title('Total Counts')
+plt.savefig(outpath+"total_counts.png", dpi=600)
+plt.show()
+
+ax = sc.pl.embedding(adata_in_tissue, basis="spatial", color="n_genes_by_counts", s=marker_size,
+                     color_map="RdYlBu_r", title="n_genes_by_counts", show=False)
+ax.set_xlabel('X')
+ax.set_ylabel('Y')
+ax.set_title('N_Features') 
+plt.savefig(outpath+"n_genes_by_counts.png", dpi=600) 
+plt.show()
+
+sc.pl.violin(adata, ['n_genes_by_counts', 'total_counts'],
+             jitter=0, multi_panel=True, save= '.png')
+#move the file from figures to outpath
+os.rename('figures/violin.png',outpath+'violin.png')
+
+sc.pp.calculate_qc_metrics(adata_in_tissue, percent_top=None, log1p=False, inplace=True)
+total_counts = float(adata.var['total_counts'].sum())
+valid_total_counts = float(adata_in_tissue.var['total_counts'].sum())
+rate = str(valid_total_counts/total_counts)
+#print("Valid total counts: ", valid_total_counts)
+with open(outpath+'stat.txt','w') as f:
+    f.write(rate)
