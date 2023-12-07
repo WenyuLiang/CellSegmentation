@@ -35,6 +35,7 @@ import time
 import argparse
 import xopen
 import warnings
+from skimage import measure
 warnings.filterwarnings('ignore')
 
 description="Example: python seg.py -p simple_grids/YL1025E1new_E1_b400 -o result -b 400"
@@ -75,7 +76,7 @@ elif args.bin == '400':
     threshold = 90
     factor = 0.000001
 elif args.bin == '40':
-    factor = 0.0003
+    factor = 0.0001#0.0008
     marker_size = 15
     threshold = 100
 else:
@@ -93,7 +94,7 @@ sc.pp.calculate_qc_metrics(adata, percent_top=None, log1p=False, inplace=True)
 total_counts = adata.var['total_counts'].sum()
  
 # sc.pl.embedding(adata, basis='spatial', color='total_counts', title='total_counts', color_map="RdYlBu_r",s=20, save = "test.png", show=False)
-ax = sc.pl.embedding(adata, basis='spatial', color='total_counts',
+ax = sc.pl.embedding(adata, basis='spatial', color='n_genes_by_counts',
                 color_map="RdYlBu_r", s=marker_size, show=False)
 
 # Remove axis and frame
@@ -111,27 +112,51 @@ img = cv2.imread(outpath + "temp.png")
 # Convert to grayscale
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-# Threshold the image
-ret, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+#-------------------------------------erosion-------------------------------------#
+# Define a kernel size for morphological operations
+# kernel_size = 7
+# kernel = np.ones((kernel_size, kernel_size), np.uint8)
+# gray = cv2.erode(gray, kernel, iterations = 1)
+# gray = cv2.dilate(gray, kernel,iterations = 1)
+# gray = cv2.erode(gray, kernel, iterations = 1)
+# gray = cv2.dilate(gray, kernel,iterations = 1)
+# gray = cv2.erode(gray, kernel, iterations = 1)
+# gray = cv2.dilate(gray, kernel,iterations = 1)
+#-------------------------------------erosion-------------------------------------#
 
-# Find contours
-contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
 if args.smooth:
-    #-------------------------------------smooth-------------------------------------#
-    binary = cv2.GaussianBlur(binary, (7, 7), 5)
-    #binary = cv2.bilateralFilter(binary, 9, 100, 100) 
+    gray = cv2.GaussianBlur(gray, (11, 11), 0)
+    #gray = cv2.bilateralFilter(gray, 41, 250, 250)
+    kernel_size = 7
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    gray = cv2.erode(gray, kernel, iterations = 2)
+    gray = cv2.dilate(gray, kernel,iterations = 1)
 
-    # 2. Find contours
-    contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+# Threshold the image
+ret, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
+ 
+# Find contours
+# contours = measure.find_contours(binary.astype(float), 0.5)
+# contours = [np.round(contour).astype(np.int32).reshape(-1, 1, 2) for contour in contours]
 
+contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+# if args.smooth:
+#     #-------------------------------------smooth-------------------------------------#
+#     binary = cv2.GaussianBlur(binary, (7, 7), 5)
+#     #binary = cv2.bilateralFilter(binary, 9, 100, 100) 
+
+#     # 2. Find contours
+#     contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+ 
 # 3. Find the third largest contour
 if len(contours) >= 3:
     three_largest_contours = heapq.nlargest(3, contours, key=cv2.contourArea)
     largest_contour = three_largest_contours[2]
 else:
     raise ValueError("Not enough contours found to extract the third largest one.")
-
+#print(largest_contour)
 # 4. Approximate contours
 if args.smooth:
     epsilon = factor * cv2.arcLength(largest_contour, True)   
