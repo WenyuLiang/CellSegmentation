@@ -117,12 +117,12 @@ if args.smooth:
     #gray = cv2.bilateralFilter(gray, 41, 250, 250)
 
     #-------------------------------------grey erosion-------------------------------------#
-    kernel_size = 21
-    kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    gray = cv2.erode(gray, kernel, iterations = 1)
-    gray = cv2.dilate(gray, kernel,iterations = 1)
-    gray = cv2.erode(gray, kernel, iterations = 1)
-    gray = cv2.dilate(gray, kernel,iterations = 1)
+    # kernel_size = 21
+    # kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    # gray = cv2.erode(gray, kernel, iterations = 1)
+    # gray = cv2.dilate(gray, kernel,iterations = 1)
+    # gray = cv2.erode(gray, kernel, iterations = 1)
+    # gray = cv2.dilate(gray, kernel,iterations = 1)
     #-------------------------------------grey erosion-------------------------------------#
 
 # Threshold the image
@@ -130,12 +130,12 @@ ret, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
 
 if args.smooth:
     #-------------------------------------binary erosion-------------------------------------#
-    kernel_size = 21
+    kernel_size = 25
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
     binary = cv2.erode(binary, kernel, iterations = 1)
-    binary = cv2.dilate(binary, kernel,iterations = 1)
-    binary = cv2.erode(binary, kernel, iterations = 1)
-    binary = cv2.dilate(binary, kernel,iterations = 1)
+    #binary = cv2.dilate(binary, kernel,iterations = 1)
+    # binary = cv2.erode(binary, kernel, iterations = 1)
+    # binary = cv2.dilate(binary, kernel,iterations = 1)
     #-------------------------------------binary erosion-------------------------------------#
 
 contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -152,12 +152,15 @@ if args.smooth:
     epsilon = factor * cv2.arcLength(largest_contour, True)   
     largest_contour = cv2.approxPolyDP(largest_contour, epsilon, True)  
     contour_points = largest_contour.squeeze()
-
+    # m = len(contour_points)
+    # s_min = m - np.sqrt(2*m)
+    # s_max = m + np.sqrt(2*m)
+    s = 5000
     # Fit a B-spline curve
-    tck, u = splprep(contour_points.T, u=None, s=0.0, per=1)
+    tck, u = splprep(contour_points.T, u=None, s = s, per=1)
 
     # Evaluate the B-spline curve at 100 points
-    u_new = np.linspace(u.min(), u.max(), 1000)
+    u_new = np.linspace(u.min(), u.max(), 10000)
     x_new, y_new = splev(u_new, tck, der=0)
     combined_points = np.vstack((x_new, y_new)).T  # This stacks them and then transposes the result
 
