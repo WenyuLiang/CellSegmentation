@@ -35,7 +35,7 @@ import time
 import argparse
 import xopen
 import warnings
-from skimage import measure
+from scipy.interpolate import splprep, splev
 warnings.filterwarnings('ignore')
 
 description="Example: python seg.py -p simple_grids/YL1025E1new_E1_b400 -o result -b 400"
@@ -94,7 +94,7 @@ sc.pp.calculate_qc_metrics(adata, percent_top=None, log1p=False, inplace=True)
 total_counts = adata.var['total_counts'].sum()
  
 # sc.pl.embedding(adata, basis='spatial', color='total_counts', title='total_counts', color_map="RdYlBu_r",s=20, save = "test.png", show=False)
-ax = sc.pl.embedding(adata, basis='spatial', color='n_genes_by_counts',
+ax = sc.pl.embedding(adata, basis='spatial', color='total_counts', #n_genes_by_counts
                 color_map="RdYlBu_r", s=marker_size, show=False)
 
 # Remove axis and frame
@@ -112,55 +112,57 @@ img = cv2.imread(outpath + "temp.png")
 # Convert to grayscale
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-#-------------------------------------erosion-------------------------------------#
-# Define a kernel size for morphological operations
-# kernel_size = 7
-# kernel = np.ones((kernel_size, kernel_size), np.uint8)
-# gray = cv2.erode(gray, kernel, iterations = 1)
-# gray = cv2.dilate(gray, kernel,iterations = 1)
-# gray = cv2.erode(gray, kernel, iterations = 1)
-# gray = cv2.dilate(gray, kernel,iterations = 1)
-# gray = cv2.erode(gray, kernel, iterations = 1)
-# gray = cv2.dilate(gray, kernel,iterations = 1)
-#-------------------------------------erosion-------------------------------------#
-
-
 if args.smooth:
     gray = cv2.GaussianBlur(gray, (11, 11), 0)
     #gray = cv2.bilateralFilter(gray, 41, 250, 250)
-    kernel_size = 7
+
+    #-------------------------------------grey erosion-------------------------------------#
+    kernel_size = 21
     kernel = np.ones((kernel_size, kernel_size), np.uint8)
-    gray = cv2.erode(gray, kernel, iterations = 2)
+    gray = cv2.erode(gray, kernel, iterations = 1)
     gray = cv2.dilate(gray, kernel,iterations = 1)
+    gray = cv2.erode(gray, kernel, iterations = 1)
+    gray = cv2.dilate(gray, kernel,iterations = 1)
+    #-------------------------------------grey erosion-------------------------------------#
 
 # Threshold the image
 ret, binary = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY)
- 
-# Find contours
-# contours = measure.find_contours(binary.astype(float), 0.5)
-# contours = [np.round(contour).astype(np.int32).reshape(-1, 1, 2) for contour in contours]
+
+if args.smooth:
+    #-------------------------------------binary erosion-------------------------------------#
+    kernel_size = 21
+    kernel = np.ones((kernel_size, kernel_size), np.uint8)
+    binary = cv2.erode(binary, kernel, iterations = 1)
+    binary = cv2.dilate(binary, kernel,iterations = 1)
+    binary = cv2.erode(binary, kernel, iterations = 1)
+    binary = cv2.dilate(binary, kernel,iterations = 1)
+    #-------------------------------------binary erosion-------------------------------------#
 
 contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-# if args.smooth:
-#     #-------------------------------------smooth-------------------------------------#
-#     binary = cv2.GaussianBlur(binary, (7, 7), 5)
-#     #binary = cv2.bilateralFilter(binary, 9, 100, 100) 
-
-#     # 2. Find contours
-#     contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
- 
 # 3. Find the third largest contour
 if len(contours) >= 3:
     three_largest_contours = heapq.nlargest(3, contours, key=cv2.contourArea)
     largest_contour = three_largest_contours[2]
 else:
     raise ValueError("Not enough contours found to extract the third largest one.")
-#print(largest_contour)
+ 
 # 4. Approximate contours
 if args.smooth:
     epsilon = factor * cv2.arcLength(largest_contour, True)   
     largest_contour = cv2.approxPolyDP(largest_contour, epsilon, True)  
+    contour_points = largest_contour.squeeze()
+
+    # Fit a B-spline curve
+    tck, u = splprep(contour_points.T, u=None, s=0.0, per=1)
+
+    # Evaluate the B-spline curve at 100 points
+    u_new = np.linspace(u.min(), u.max(), 1000)
+    x_new, y_new = splev(u_new, tck, der=0)
+    combined_points = np.vstack((x_new, y_new)).T  # This stacks them and then transposes the result
+
+    # Step 2: Reshape to the format (n, 1, 2)
+    largest_contour = combined_points.reshape(-1, 1, 2).astype(np.int32)
 #-------------------------------------smooth-------------------------------------#
 
 def preprocess(adata):
@@ -210,20 +212,11 @@ def preprocess(adata):
 
 def process_image(binary):
     imContours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-
-    # Define size constraints
-    # divMaxSize = 0.180
-    # divMinSize = 0.120
-    # Create a window for display
-    # cv2.namedWindow("Image", cv2.WINDOW_NORMAL | cv2.WINDOW_KEEPRATIO | cv2.WINDOW_GUI_EXPANDED)
-    # Loop through the contours
-    #print("Number of contours: ", len(imContours))
     barcode_contour = []
     for i in range(len(imContours)):
         ratio = np.sqrt(cv2.contourArea(imContours[i])) / cv2.arcLength(imContours[i], True)
         if 680<cv2.contourArea(imContours[i])<690:
             barcode_contour.append(imContours[i])
-            #print("I'm a star!", cv2.contourArea(imContours[i]), ratio)
    
     barcode_pixel_coords = []
     for cnt in barcode_contour:
@@ -296,10 +289,11 @@ ax.set_title('N_Features')
 plt.savefig(outpath+"n_genes_by_counts.png", dpi=600) 
 plt.show()
 
+prefix = args.path[:-1].split('/')[-1] if args.path.endswith('/') else args.path.split('/')[-1]  
 sc.pl.violin(adata, ['n_genes_by_counts', 'total_counts'],
-             jitter=0, multi_panel=True, save= '.png')
+             jitter=0, multi_panel=True, save= prefix + '.png')
 #move the file from figures to outpath
-os.rename('figures/violin.png',outpath+'violin.png')
+os.rename(f'figures/violin{prefix}.png',outpath+'violin.png')
 
 sc.pp.calculate_qc_metrics(adata_in_tissue, percent_top=None, log1p=False, inplace=True)
 total_counts = float(adata.var['total_counts'].sum())
